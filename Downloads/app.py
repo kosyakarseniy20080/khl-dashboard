@@ -5,8 +5,15 @@ import os
 
 app = Flask(__name__)
 
+# Определяем путь к БД относительно текущего файла скрипта
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "khl_dashboard.db")
+
+def get_db_connection():
+    """Вспомогательная функция для подключения к БД"""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 def init_db():
     print(f"\n--- ИНИЦИАЛИЗАЦИЯ БД ---")
@@ -23,13 +30,20 @@ def init_db():
     cursor.execute('''CREATE TABLE IF NOT EXISTS matches 
                       (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT)''')
     
+    # Проверяем, есть ли данные
     cursor.execute("SELECT COUNT(*) FROM players")
     count = cursor.fetchone()[0]
     print(f"Количество игроков в БД: {count}")
     
     if count == 0:
-        print("Добавляем тестовых игроков и матчи...")
-        players = [(1, 'Никита Гусев'), (2, 'Сергей Мозякин'), (3, 'Александр Радулов')]
+        print("База пуста. Заполняем тестовыми данными...")
+        
+        # Игроки
+        players = [
+            (1, 'Никита Гусев'), 
+            (2, 'Сергей Мозякин'), 
+            (3, 'Александр Радулов')
+        ]
         cursor.executemany("INSERT INTO players VALUES (?, ?)", players)
         
         # Добавляем матчи
@@ -39,20 +53,24 @@ def init_db():
         
         print("Генерируем броски...")
         for player_id in [1, 2, 3]:
-            for match_id in [1, 2, 3, 4, 5]:
-                # Для каждого матча генерируем от 2 до 8 бросков
-                shots_in_match = random.randint(2, 8)
-                for _ in range(shots_in_match): 
+            for match_id in range(1, 6):
+                shots_count = random.randint(3, 10)
+                for _ in range(shots_count):
+                    # Координаты КХЛ (примерные зоны атаки)
                     x = random.randint(200, 800) 
-                    y = random.randint(100, 400)
-                    shot_type = 1 if random.random() > 0.7 else 2 
-                    cursor.execute("INSERT INTO shots (player_id, match_id, x, y, shot_type) VALUES (?, ?, ?, ?, ?)", 
-                                   (player_id, match_id, x, y, shot_type))
-    
-    conn.commit()
-    cursor.execute("SELECT COUNT(*) FROM players")
-    print(f"Игроков после инициализации: {cursor.fetchone()[0]}")
-    print(f"--- ИНИЦИАЛИЗАЦИЯ ЗАВЕРШЕНА ---\n")
+                    y = random.randint(50, 450)
+                    # 1 - гол, 2 - сейв/промах
+                    shot_type = 1 if random.random() > 0.8 else 2 
+                    
+                    cursor.execute(
+                        "INSERT INTO shots (player_id, match_id, x, y, shot_type) VALUES (?, ?, ?, ?, ?)", 
+                        (player_id, match_id, x, y, shot_type)
+                    )
+        conn.commit()
+        print("Тестовые данные добавлены.")
+    else:
+        print(f"В базе уже есть {count} игроков.")
+        
     conn.close()
 
 @app.after_request
@@ -62,7 +80,10 @@ def add_header(response):
 
 @app.route('/')
 def index():
-    return render_template('index.html')
+    try:
+        return render_template('index.html')
+    except Exception as e:
+        return f"Ошибка шаблона: {e}. Убедитесь, что index.html лежит в папке templates/", 500
 
 @app.route('/api/players')
 def api_players():
@@ -74,8 +95,7 @@ def api_players():
 
 @app.route('/api/shots/<int:player_id>')
 def api_shots(player_id):
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    conn = get_db_connection()
     shots = conn.execute('SELECT x, y, shot_type FROM shots WHERE player_id = ?', (player_id,)).fetchall()
     conn.close()
     return jsonify([dict(s) for s in shots])
@@ -83,10 +103,7 @@ def api_shots(player_id):
 # НОВЫЙ МАРШРУТ: История бросков по матчам для линейного графика
 @app.route('/api/player/<int:player_id>/history')
 def api_player_history(player_id):
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    
-    # Группируем броски по матчам и считаем их количество
+    conn = get_db_connection()
     query = """
         SELECT m.name as match_name, COUNT(s.id) as shot_count
         FROM matches m
@@ -104,10 +121,9 @@ def api_player_history(player_id):
     return jsonify({"labels": labels, "data": data})
 
 if __name__ == '__main__':
-    if os.path.exists(DB_PATH):
-        print(f"Удаляем старую БД: {DB_PATH}")
-        os.remove(DB_PATH)
-        
+    # Если хотите сбрасывать БД при каждом запуске, раскомментируйте строку ниже:
+    # if os.path.exists(DB_PATH): os.remove(DB_PATH)
+    
     init_db() 
     print("Сервер запущен! Откройте http://127.0.0.1:5000/ в браузере.")
     app.run(debug=True)
